@@ -53,6 +53,12 @@ jobs:
           ssh ${SERVER_USER}@${SERVER_HOST} bash << 'ENDSSH'
             set -e
 
+            if [ ! -d "~/projects/${PROJECT_NAME}/.git" ]; then
+              echo "📂 Directory not a Git repository. Cloning..."
+              mkdir -p ~/projects/${PROJECT_NAME}
+              git clone https://github.com/<your-username>/<your-repo>.git ~/projects/${PROJECT_NAME}
+            fi
+
             echo "🔄 Pulling latest changes from GitHub..."
             cd ~/projects/${PROJECT_NAME}
             git reset --hard
