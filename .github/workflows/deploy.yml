@@ -49,20 +49,36 @@ jobs:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          REPO_URL: https://github.com/${{ github.repository }}.git
+          DEPLOY_BRANCH: main
         run: |
-          ssh ${SERVER_USER}@${SERVER_HOST} bash << 'ENDSSH'
-            set -e
+          ssh "${SERVER_USER}@${SERVER_HOST}" \
+            "PROJECT_NAME='${PROJECT_NAME}' REPO_URL='${REPO_URL}' DEPLOY_BRANCH='${DEPLOY_BRANCH}' bash -s" << 'ENDSSH'
+            set -euo pipefail
 
-            if [ ! -d "~/projects/${PROJECT_NAME}/.git" ]; then
-              echo "📂 Directory not a Git repository. Cloning..."
-              mkdir -p ~/projects/${PROJECT_NAME}
-              git clone https://github.com/<your-username>/<your-repo>.git ~/projects/${PROJECT_NAME}
+            APP_DIR="$HOME/projects/${PROJECT_NAME}"
+
+            echo "📂 Ensuring project directory exists..."
+            mkdir -p "$HOME/projects"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "📥 Cloning repository into $APP_DIR ..."
+              rm -rf "$APP_DIR"
+              git clone "$REPO_URL" "$APP_DIR"
             fi
 
-            echo "🔄 Pulling latest changes from GitHub..."
-            cd ~/projects/${PROJECT_NAME}
-            git reset --hard
-            git pull origin main
+            echo "🔄 Syncing latest code..."
+            cd "$APP_DIR"
+            git remote set-url origin "$REPO_URL"
+            git fetch origin "$DEPLOY_BRANCH"
+            git checkout "$DEPLOY_BRANCH"
+            git pull --ff-only origin "$DEPLOY_BRANCH"
+
+            if ! command -v pnpm >/dev/null 2>&1; then
+              echo "📦 pnpm not found. Enabling via corepack..."
+              corepack enable
+              corepack prepare pnpm@9 --activate
+            fi
 
             echo "📦 Installing dependencies..."
             pnpm install --frozen-lockfile
@@ -70,10 +86,21 @@ jobs:
             echo "🏗 Building the application..."
             pnpm build
 
-            echo "🔄 Restarting the application with PM2..."
-            pm2 restart ${PROJECT_NAME} || pm2 start dist/index.js --name ${PROJECT_NAME}
+            if [ -f "drizzle.config.ts" ]; then
+              echo "🗄 Running database migrations..."
+              pnpm db:migrate
+            fi
 
-            echo "✅ Deployment completed successfully!"
+            echo "🔄 Restarting processes with PM2..."
+            mkdir -p logs
+            if pm2 describe instasave-api >/dev/null 2>&1; then
+              pm2 reload ecosystem.config.cjs --env production
+            else
+              pm2 start ecosystem.config.cjs --env production
+            fi
+            pm2 save
+
+            echo "✅ Deployment completed successfully."
           ENDSSH
 
       - name: 📢 Telegram notification
